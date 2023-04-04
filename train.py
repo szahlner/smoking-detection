@@ -68,28 +68,28 @@ def get_train_transform():
         T.RandomRotation(15),
         T.RandomCrop(204),
         T.ToTensor(),
-        T.Normalize((0, 0, 0), (1, 1, 1)),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
-
 
 def get_val_transform():
     return T.Compose([
         T.ToTensor(),
-        T.Normalize((0, 0, 0), (1, 1, 1)),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
 
 class SmokingDataset(Dataset):
-    def __init__(self, images, class_to_int, mode="train", transforms=None):
+    def __init__(self, images, class_to_int, directory, mode="train", transforms=None):
         super(Dataset, self).__init__()
         self.images = images
         self.class_to_int = class_to_int
         self.mode = mode
         self.transforms = transforms
+        self.directory = directory
 
     def __getitem__(self, idx):
         image_name = self.images[idx]
-        image_path = os.path.join(DIR_TRAIN, image_name)
+        image_path = os.path.join(self.directory, image_name)
         
         image = Image.open(image_path)
         image = image.resize((224, 224))
@@ -154,7 +154,7 @@ def train_one_epoch(train_data_loader):
     return epoch_loss, epoch_acc, total_time
 
 
-def val_one_epoch(val_data_loader, best_val_acc):
+def val_one_epoch(val_data_loader, best_val_acc, model, criterion, device, val_logs):
     epoch_loss, epoch_acc = [], []
     start_time = time.time()
 
@@ -202,22 +202,25 @@ if __name__ == "__main__":
     class_to_int = {"smoking": 0, "not_smoking": 1}
     int_to_class = {0: "smoking", 1: "not_smoking"}
 
-    train_images, val_images = train_test_split(images, test_size=0.25)
+    train_images, val_images = train_test_split(images, test_size=0.2)
 
-    train_dataset = SmokingDataset(images=train_images, class_to_int=class_to_int, mode="train", transforms=get_train_transform())
-    val_dataset = SmokingDataset(val_images, class_to_int, mode="val", transforms=get_val_transform())
+    train_dataset = SmokingDataset(images=train_images, class_to_int=class_to_int, directory=DIR_TRAIN, mode="train", transforms=get_train_transform())
+    val_dataset = SmokingDataset(val_images, class_to_int, directory=DIR_TRAIN, mode="val", transforms=get_val_transform())
+
+    batch_size = 16
+    num_worker = 4
 
     train_data_loader = DataLoader(
         dataset=train_dataset,
-        num_workers=4,
-        batch_size=16,
+        num_workers=num_worker,
+        batch_size=batch_size,
         shuffle=True,
     )
 
     val_data_loader = DataLoader(
         dataset=val_dataset,
-        num_workers=4,
-        batch_size=16,
+        num_workers=num_worker,
+        batch_size=batch_size,
         shuffle=True,
     )
 
@@ -231,13 +234,10 @@ if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     model = resnet50(pretrained=True)
-    # for param in model.parameters():
-    #     param.requires_grad = False
+    for param in model.parameters():
+        param.requires_grad = False
 
     model.fc = nn.Sequential(
-        # nn.Sequential(*(list(model.children())[:-2])),
-        # nn.AvgPool2d(kernel_size=(7, 7)),
-        # nn.Flatten(),
         nn.Linear(2048, 512),
         nn.ReLU(),
         nn.Dropout(0.5),
@@ -248,12 +248,10 @@ if __name__ == "__main__":
         nn.ReLU(),
         nn.Dropout(0.5),
         nn.Linear(128, 1),
-        # nn.Softmax(),
         nn.Sigmoid(),
     )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
     criterion = nn.BCELoss()
 
@@ -262,10 +260,11 @@ if __name__ == "__main__":
 
     model.to(device)
 
-    epochs = 50
+    epochs = 100
 
     best_val_acc = 0
     for epoch in range(epochs):
+        model.train()
         loss, acc, _time = train_one_epoch(train_data_loader)
 
         print("")
@@ -275,7 +274,8 @@ if __name__ == "__main__":
         print("Acc : {}".format(round(acc, 4)))
         print("Time : {}".format(round(_time, 4)))
 
-        loss, acc, _time, best_val_acc = val_one_epoch(val_data_loader, best_val_acc)
+        model.eval()
+        loss, acc, _time, best_val_acc = val_one_epoch(val_data_loader, best_val_acc, model=model, criterion=criterion, device=device, val_logs=val_logs)
 
         print("")
         print("Validating")
