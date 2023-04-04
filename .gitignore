@@ -130,6 +130,8 @@ dmypy.json
 
 # Data
 data
+dataset
+model
 
 # IDE
 .idea
